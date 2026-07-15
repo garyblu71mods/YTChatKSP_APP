@@ -9,7 +9,6 @@
 	<ImplicitUsings>enable</ImplicitUsings>
 	<PublishSingleFile>true</PublishSingleFile>
 	<SelfContained>true</SelfContained>
-	<ApplicationIcon>icon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>

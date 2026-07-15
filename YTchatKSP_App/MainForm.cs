@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using YTchatKSP_App.Services;
 
 namespace YTchatKSP_App;
@@ -7,6 +8,11 @@ public partial class MainForm : Form
     private HttpApiServer _apiServer;
     private YouTubeChatService _chatService;
     private Process? _bridgeProcess;
+    private System.Windows.Forms.Timer? _bridgeMonitorTimer;
+    private string? _lastConnectedVideoId;
+    private int _reconnectAttempts = 0;
+    private const int MaxReconnectAttempts = 5; // Więcej prób z backoff
+    private DateTime _lastReconnectTime = DateTime.MinValue;
 
     public MainForm()
     {
@@ -24,11 +30,68 @@ public partial class MainForm : Form
             _apiServer.OnMessageReceived += OnChatMessageReceived;
             _apiServer.OnConnectionStatusChanged += OnConnectionStatusChanged;
 
+            _chatService.OnLog += (msg) => AddLog(msg);
+            _chatService.OnConnectionStatusChanged += OnConnectionStatusChanged;
+            _chatService.OnConnectionLost += OnChatConnectionLost;
+
+            // Monitor procesu bridge co 10 sekund
+            _bridgeMonitorTimer = new System.Windows.Forms.Timer();
+            _bridgeMonitorTimer.Interval = 10000;
+            _bridgeMonitorTimer.Tick += (s, e) => CheckBridgeProcessHealth();
+            _bridgeMonitorTimer.Start();
+
             AddLog("✓ HTTP API Server initialized");
+            AddLog("✓ Chat Service initialized");
         }
         catch (Exception ex)
         {
             AddLog($"✗ Failed to start API: {ex.Message}");
+        }
+    }
+
+    private async void OnChatConnectionLost()
+    {
+        AddLog("⚠️ Chat connection lost - attempting auto-reconnect...");
+
+        if (_lastConnectedVideoId != null && _reconnectAttempts < MaxReconnectAttempts)
+        {
+            _reconnectAttempts++;
+
+            // Exponential backoff: 1s, 2s, 4s, 8s, 16s
+            int delaySeconds = (int)Math.Pow(2, _reconnectAttempts - 1);
+            if (delaySeconds > 30) delaySeconds = 30; // Max 30 sekund
+
+            AddLog($"🔄 Auto-reconnect attempt {_reconnectAttempts}/{MaxReconnectAttempts} (waiting {delaySeconds}s)");
+
+            try
+            {
+                _lastReconnectTime = DateTime.Now;
+                await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
+                await ConnectToChatAsync(_lastConnectedVideoId);
+                _reconnectAttempts = 0; // Reset licznika przy pomyślnym reconnect
+            }
+            catch (Exception ex)
+            {
+                AddLog($"✗ Auto-reconnect failed: {ex.Message}");
+
+                if (_reconnectAttempts >= MaxReconnectAttempts)
+                {
+                    AddLog("❌ Max reconnect attempts reached. Please reconnect manually.");
+                    _lastConnectedVideoId = null;
+                }
+            }
+        }
+    }
+
+    private void CheckBridgeProcessHealth()
+    {
+        if (_bridgeProcess != null)
+        {
+            if (_bridgeProcess.HasExited)
+            {
+                AddLog("⚠️ Bridge process died unexpectedly");
+                OnChatConnectionLost();
+            }
         }
     }
 
@@ -57,6 +120,9 @@ public partial class MainForm : Form
                 AddLog("✗ Invalid YouTube URL or ID");
                 return;
             }
+
+            _lastConnectedVideoId = videoId;
+            _reconnectAttempts = 0;
 
             await _chatService.ConnectAsync(videoId);
             await StartYouTubeBridgeAsync(videoId);
@@ -188,6 +254,9 @@ public partial class MainForm : Form
             await _chatService.DisconnectAsync();
             await _apiServer.SendStatusAsync(false);
 
+            _lastConnectedVideoId = null;
+            _reconnectAttempts = 0;
+
             _apiServer.AddMessage(new Models.ChatMessage(
                 "system_2",
                 "System",
@@ -238,6 +307,9 @@ public partial class MainForm : Form
                 return;
             }
 
+            // Powiadom serwis że otrzymaliśmy wiadomość (dla health check'a)
+            _chatService.OnMessageReceived();
+
             listBoxMessages.Items.Add(message.Text);
             listBoxMessages.TopIndex = listBoxMessages.Items.Count - 1;
             labelMessageCount.Text = $"Messages: {listBoxMessages.Items.Count}";
@@ -270,6 +342,13 @@ public partial class MainForm : Form
 
         try
         {
+            // Zatrzymaj monitoring
+            if (_bridgeMonitorTimer != null)
+            {
+                _bridgeMonitorTimer.Stop();
+                _bridgeMonitorTimer.Dispose();
+            }
+
             if (_bridgeProcess != null && !_bridgeProcess.HasExited)
             {
                 StopBridge();
