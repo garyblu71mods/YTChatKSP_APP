@@ -340,6 +340,24 @@ public partial class MainForm : Form
     {
         base.OnFormClosing(e);
 
+        // Jeśli połączenie jest aktywne, poproś potwierdzenie
+        if (_chatService.IsConnected && e.CloseReason == CloseReason.UserClosing)
+        {
+            DialogResult result = MessageBox.Show(
+                "Połączenie z YouTube Chat jest aktywne.\n\nNa pewno chcesz zamknąć aplikację?",
+                "Potwierdzenie zamknięcia",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button2
+            );
+
+            if (result == DialogResult.No)
+            {
+                e.Cancel = true;
+                return;
+            }
+        }
+
         try
         {
             // Zatrzymaj monitoring
