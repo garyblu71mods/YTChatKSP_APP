@@ -113,15 +113,17 @@ public class HttpApiServer : IDisposable
                 using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))
                 {
                     string body = await reader.ReadToEndAsync();
+                    OnLog?.Invoke($"📨 Received POST /messages: {body}");
+
                     var sendRequest = JsonConvert.DeserializeObject<SendMessageRequest>(body);
                     if (sendRequest?.Nick != null && sendRequest?.Text != null)
                     {
-                        string displayText = $"{sendRequest.Nick}: {sendRequest.Text}";
+                        OnLog?.Invoke($"✓ Valid message: {sendRequest.Nick}: {sendRequest.Text}");
 
                         var msg = new ChatMessage(
                             Guid.NewGuid().ToString(),
-                            "",
-                            displayText
+                            sendRequest.Nick,
+                            sendRequest.Text
                         );
 
                         if (_isConnected)
@@ -133,12 +135,14 @@ public class HttpApiServer : IDisposable
                         else
                         {
                             statusCode = 403;
+                            OnLog?.Invoke($"⚠️ Message rejected - not connected");
                             responseBody = JsonConvert.SerializeObject(new { success = false, error = "Not connected" });
                         }
                     }
                     else
                     {
                         statusCode = 400;
+                        OnLog?.Invoke($"⚠️ Invalid message format - missing Nick or Text");
                         responseBody = JsonConvert.SerializeObject(new { success = false, error = "Invalid request" });
                     }
                 }
@@ -231,6 +235,7 @@ public class HttpApiServer : IDisposable
                 _recentMessageIds.Remove(id);
         }
 
+        OnLog?.Invoke($"📤 Message added to queue (total: {_messages.Count}): {message.Text}");
         OnMessageReceived?.Invoke(message);
     }
 

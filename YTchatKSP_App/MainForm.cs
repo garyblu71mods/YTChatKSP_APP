@@ -103,30 +103,39 @@ public partial class MainForm : Form
         {
             AddLog($"🔄 Starting YouTube Chat Bridge");
 
-            string bridgePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "youtube_chat_bridge.exe");
-
-            if (!File.Exists(bridgePath))
+            // Szukaj bridge'a w logicznym miejscu - w folderze YTchatKSP_App\dist
+            string[] possiblePaths = new[]
             {
-                var binFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "YTchatKSP_App", "dist");
-                bridgePath = Path.Combine(binFolder, "youtube_chat_bridge.exe");
+                // 1. Obok exe programu (publication)
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "youtube_chat_bridge.exe"),
 
-                if (!File.Exists(bridgePath))
+                // 2. W folderze dist (source)
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..", "YTchatKSP_App", "dist", "youtube_chat_bridge.exe"),
+
+                // 3. Bezpośrednie roowce project
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "dist", "youtube_chat_bridge.exe"),
+            };
+
+            string bridgePath = null;
+            foreach (var path in possiblePaths)
+            {
+                string fullPath = Path.GetFullPath(path);
+                AddLog($"🔍 Checking: {fullPath}");
+
+                if (File.Exists(fullPath))
                 {
-                    bridgePath = Path.Combine(
-                        Path.GetDirectoryName(binFolder) ?? "",
-                        "YTchatKSP_App",
-                        "dist",
-                        "youtube_chat_bridge.exe"
-                    );
+                    bridgePath = fullPath;
+                    AddLog($"✓ Found bridge at: {bridgePath}");
+                    break;
                 }
             }
 
-            if (!File.Exists(bridgePath))
+            if (string.IsNullOrEmpty(bridgePath) || !File.Exists(bridgePath))
             {
-                throw new FileNotFoundException($"youtube_chat_bridge.exe not found at {bridgePath}");
+                throw new FileNotFoundException($"youtube_chat_bridge.exe not found. Checked paths: {string.Join(", ", possiblePaths)}");
             }
 
-            AddLog($"✓ Found bridge: {bridgePath}");
+            AddLog($"✓ Starting: {Path.GetFileName(bridgePath)}");
 
             _bridgeProcess = new Process
             {
@@ -266,15 +275,25 @@ public partial class MainForm : Form
                 return;
             }
 
-            // Powiadom serwis że otrzymaliśmy wiadomość (dla health check'a)
+            AddLog($"📥 UI received message: Nick='{message.Nick}' | Text='{message.Text}'");
+
+            // Powiadom serwis że otrzymaliśmy wiadomość (dla keep-alive)
             _chatService.OnMessageReceived();
 
-            listBoxMessages.Items.Add(message.Text);
+            // Formatuj wiadomość: nick jest oddzielny od tekstu, więc formatujemy tu
+            string formattedMessage = $"{message.Nick}: {message.Text}";
+            listBoxMessages.Items.Add(formattedMessage);
             listBoxMessages.TopIndex = listBoxMessages.Items.Count - 1;
             labelMessageCount.Text = $"Messages: {listBoxMessages.Items.Count}";
+            AddLog($"✓ Message displayed ({listBoxMessages.Items.Count} total)");
         }
         catch (ObjectDisposedException)
         {
+            AddLog("⚠️ Form disposed while adding message");
+        }
+        catch (Exception ex)
+        {
+            AddLog($"❌ Error adding message to UI: {ex.Message}");
         }
     }
 
