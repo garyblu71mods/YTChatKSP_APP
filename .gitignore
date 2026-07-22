@@ -39,3 +39,5 @@ node_modules/
 build/
 dist/
 *.spec
+publish/
+temp_extract/

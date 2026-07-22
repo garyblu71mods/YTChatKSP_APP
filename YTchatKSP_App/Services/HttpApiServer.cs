@@ -16,6 +16,10 @@ public class HttpApiServer : IDisposable
     private bool _isConnected = false;
     private bool _disposed = false;
 
+    // Deduplication - track last N message IDs to prevent duplicates
+    private readonly HashSet<string> _recentMessageIds = new();
+    private const int MaxRecentIds = 50;
+
     public event Action<string>? OnLog;
     public event Action<ChatMessage>? OnMessageReceived;
     public event Action<bool>? OnConnectionStatusChanged;
@@ -203,12 +207,30 @@ public class HttpApiServer : IDisposable
 
     public void AddMessage(ChatMessage message)
     {
+        // Check for duplicates - if exact same message was added recently, skip it
+        if (_recentMessageIds.Contains(message.Id))
+        {
+            OnLog?.Invoke($"⚠️ Duplicate message blocked: {message.Id}");
+            return;
+        }
+
         lock (_messages)
         {
             _messages.Enqueue(message);
             if (_messages.Count > MaxMessages)
                 _messages.Dequeue();
         }
+
+        // Track this message ID
+        _recentMessageIds.Add(message.Id);
+        if (_recentMessageIds.Count > MaxRecentIds)
+        {
+            // Remove oldest - just clear some when too many
+            var toRemove = _recentMessageIds.Take(_recentMessageIds.Count - MaxRecentIds).ToList();
+            foreach (var id in toRemove)
+                _recentMessageIds.Remove(id);
+        }
+
         OnMessageReceived?.Invoke(message);
     }
 
@@ -226,6 +248,7 @@ public class HttpApiServer : IDisposable
         {
             _messages.Clear();
         }
+        _recentMessageIds.Clear();
     }
 
     public async Task SendStatusAsync(bool connected)

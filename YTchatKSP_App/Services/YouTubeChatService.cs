@@ -7,16 +7,13 @@ public class YouTubeChatService
     private Task? _healthCheckTask;
     private DateTime _lastMessageTime = DateTime.MinValue;
 
-    // Konfiguracja timeoutów (wartości domyślne można zmienić)
-    private int _healthCheckIntervalMs = 5000; // Co 5 sekund sprawdzamy
-    private int _messageTimeoutMs = 45000; // 45 sekund bez wiadomości = timeout
-    private int _maxHealthCheckFailures = 3; // 3 consecutive failures
-
-    private int _healthCheckFailureCount = 0;
+    // Keep-alive check (nie resetuje, tylko monitoruje)
+    private int _keepAliveIntervalMs = 30000; // Co 30 sekund wysyłamy keep-alive ping
+    private int _maxIdleTimeMs = 300000; // 5 minut idle warning
 
     public event Action<bool>? OnConnectionStatusChanged;
     public event Action<string>? OnLog;
-    public event Action? OnConnectionLost; // Nowy event dla utraty połączenia
+    public event Action? OnConnectionLost; // Event dla poważnego disconnect
 
     public bool IsConnected => _isConnected;
 
@@ -24,11 +21,10 @@ public class YouTubeChatService
     {
         _isConnected = true;
         _lastMessageTime = DateTime.Now;
-        _healthCheckFailureCount = 0;
-        OnLog?.Invoke($"📡 Health check started for video: {videoId}");
+        OnLog?.Invoke($"📡 Keep-alive connection started for video: {videoId}");
         OnConnectionStatusChanged?.Invoke(true);
 
-        // Uruchom health check w tle
+        // Uruchom keep-alive w tle
         _healthCheckCancellation = new CancellationTokenSource();
         _healthCheckTask = HealthCheckLoopAsync(_healthCheckCancellation.Token);
 
@@ -86,8 +82,7 @@ public class YouTubeChatService
     public void OnMessageReceived()
     {
         _lastMessageTime = DateTime.Now;
-        _healthCheckFailureCount = 0;
-        OnLog?.Invoke("✓ Message received - connection alive");
+        OnLog?.Invoke("✓ Message received - updating keep-alive");
     }
 
     private async Task HealthCheckLoopAsync(CancellationToken cancellationToken)
@@ -96,53 +91,40 @@ public class YouTubeChatService
         {
             while (!cancellationToken.IsCancellationRequested && _isConnected)
             {
-                await Task.Delay(_healthCheckIntervalMs, cancellationToken);
+                await Task.Delay(_keepAliveIntervalMs, cancellationToken);
 
-                // Sprawdzenie czy timeout z braku wiadomości
+                // Keep-alive check - tylko monitoruj, nie resetuj
                 TimeSpan timeSinceLastMessage = DateTime.Now - _lastMessageTime;
-                if (timeSinceLastMessage.TotalMilliseconds > _messageTimeoutMs)
-                {
-                    _healthCheckFailureCount++;
-                    OnLog?.Invoke($"⚠️ No messages for {timeSinceLastMessage.TotalSeconds:F0}s (fail count: {_healthCheckFailureCount}/{_maxHealthCheckFailures})");
 
-                    if (_healthCheckFailureCount >= _maxHealthCheckFailures)
-                    {
-                        OnLog?.Invoke($"🔴 Connection timeout - disconnected due to inactivity ({timeSinceLastMessage.TotalSeconds:F0}s)");
-                        _isConnected = false;
-                        OnConnectionStatusChanged?.Invoke(false);
-                        OnConnectionLost?.Invoke();
-                        break;
-                    }
-                }
-                else
+                if (timeSinceLastMessage.TotalMilliseconds > _maxIdleTimeMs)
                 {
-                    // Jeśli znowu są wiadomości, resetuj licznik
-                    if (_healthCheckFailureCount > 0)
-                    {
-                        _healthCheckFailureCount = 0;
-                        OnLog?.Invoke("✓ Connection recovered - messages received");
-                    }
+                    // 5+ minut bez wiadomości - only log warning, nie resetuj
+                    OnLog?.Invoke($"⏳ Channel idle for {timeSinceLastMessage.TotalMinutes:F0} minutes (but still connected)");
+                }
+                else if (timeSinceLastMessage.TotalMilliseconds > _keepAliveIntervalMs)
+                {
+                    // Loguj keep-alive status
+                    OnLog?.Invoke($"✓ Keep-alive: Connection active (last message: {timeSinceLastMessage.TotalSeconds:F0}s ago)");
                 }
             }
         }
         catch (OperationCanceledException)
         {
-            OnLog?.Invoke("Health check cancelled");
+            OnLog?.Invoke("Keep-alive stopped");
         }
         catch (Exception ex)
         {
-            OnLog?.Invoke($"❌ Health check error: {ex.Message}");
+            OnLog?.Invoke($"❌ Keep-alive error: {ex.Message}");
         }
     }
 
     /// <summary>
-    /// Metoda do konfiguracji timeoutów (opcjonalnie)
+    /// Konfiguracja keep-alive timeout'ów (opcjonalnie)
     /// </summary>
-    public void ConfigureTimeouts(int healthCheckIntervalMs = 5000, int messageTimeoutMs = 45000, int maxFailures = 3)
+    public void ConfigureKeepAlive(int keepAliveIntervalMs = 30000, int maxIdleWarningMs = 300000)
     {
-        _healthCheckIntervalMs = healthCheckIntervalMs;
-        _messageTimeoutMs = messageTimeoutMs;
-        _maxHealthCheckFailures = maxFailures;
-        OnLog?.Invoke($"⚙️ Timeout configured: check={healthCheckIntervalMs}ms, timeout={messageTimeoutMs}ms, maxFailures={maxFailures}");
+        _keepAliveIntervalMs = keepAliveIntervalMs;
+        _maxIdleTimeMs = maxIdleWarningMs;
+        OnLog?.Invoke($"⚙️ Keep-alive configured: interval={keepAliveIntervalMs}ms, idle warning at={maxIdleWarningMs}ms");
     }
 }
